@@ -1,0 +1,23 @@
+========== ingestionjob code ===========
+
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'tablename', 'destination'])
+
+glueContext = GlueContext(SparkContext.getOrCreate())
+
+customerDF = glueContext.create_dynamic_frame.from_catalog(
+             database="dojodb",
+             table_name=args['tablename'], redshift_tmp_dir="s3://dojo-dataset/scripts/")
+
+glueContext.write_dynamic_frame.from_options(customerDF, connection_type = "s3", connection_options = {"path": args['destination']}, format = "csv")
+
+==== CLI to Run Jobs ====
+
+aws glue start-job-run --job-name ingestionjob --arguments '{"--tablename":"postgres_public_customers","--destination":"s3://dojo-dataset/customers"}'
+
+aws glue start-job-run --job-name ingestionjob --arguments '{"--tablename":"postgres_public_employees","--destination":"s3://dojo-dataset/employees"}'
