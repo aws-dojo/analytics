@@ -1,0 +1,77 @@
+--- IAM Role for Redshift ----
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ReadStream",
+            "Effect": "Allow",
+            "Action": [
+                "kinesis:DescribeStreamSummary",
+                "kinesis:GetShardIterator",
+                "kinesis:GetRecords",
+                "kinesis:DescribeStream"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ListStream",
+            "Effect": "Allow",
+            "Action": [
+                "kinesis:ListStreams",
+                "kinesis:ListShards"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+
+--- external schema for kinesis ---
+
+CREATE EXTERNAL SCHEMA <SCHEMA_NAME>
+FROM KINESIS
+IAM_ROLE 'arn:aws:iam::123456789012:role/<IAM_ROLE_NAME>';
+
+---- create materialized view ----
+
+CREATE MATERIALIZED VIEW <VIEW_NAME> AS
+    SELECT approximatearrivaltimestamp,
+    partitionkey,
+    shardid,
+    sequencenumber,
+    json_parse(from_varbyte(data, 'utf-8')) as payload    
+    FROM <SCHEMA_NAME>."<Data_Stream_NAME>";
+	
+---- refresh view ----
+
+REFRESH MATERIALIZED VIEW <VIEW_NAME>;
+
+--- select data from view ----
+
+select * from <VIEW_NAME>
+
+---- use notebook code to ingest data ----
+
+import boto3
+import random
+
+client = boto3.client('kinesis')
+
+for x in range(1, 6):
+    v = x * random.randint(1, 4)
+    t = x * random.randint(1, 3)
+    p = x * random.randint(4,7)
+    mydata = '{ "vibration": ' + str(v) + ', "temperature": ' + str(t) + ', "pressure": ' + str(p) + '}'
+    partitionkey = random.randint(10, 100);
+    response = client.put_record(StreamName='<Data_Stream_NAME>', Data=mydata, PartitionKey=str(partitionkey))
+
+print("Ingestion Done")
+
+--- ingested data sample ----
+
+{ 
+ "vibration": 10,
+ "temperature": 33,
+ "pressure": 41
+}
+
+
