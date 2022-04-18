@@ -1,0 +1,133 @@
+
+=========== Reusable Workflow Configuration ===================
+
+{
+  "Comment": "Data Quality Check Workflow",
+  "StartAt": "StartProfileJob",
+  "States": {
+    "StartProfileJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::databrew:startJobRun.sync",
+      "Parameters": {
+        "Name.$": "$.profilejobname"
+      },
+      "Next": "CheckDQOutput"
+    },
+    "CheckDQOutput": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "<ARN_DQ_CHECK_LAMBDA_FUNCTION>"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Choice"
+    },
+    "Choice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Not": {
+            "Variable": "$.dqstatus",
+            "StringEquals": "SUCCEEDED"
+          },
+          "Next": "NotifyDQFail"
+        }
+      ],
+      "Default": "Pass"
+    },
+    "NotifyDQFail": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "Message.$": "$",
+        "TopicArn": "<ARN_SNS_TOPIC_FOR_NOTIFICATION>"
+      },
+      "Next": "Fail"
+    },
+    "Fail": {
+      "Type": "Fail",
+      "Error": "Data Quality Check Failed"
+    },
+    "Pass": {
+      "Type": "Pass",
+      "End": true
+    }
+  }
+}
+
+=========== Lambda Code to Check DQ Rules Result ===================
+
+import json
+import boto3
+
+def lambda_handler(event, context):
+    # TODO implement
+    bucketname = ""
+    filename = ""
+    jobname = event["JobName"]
+    for o in event["Outputs"]:
+        bucketname = o["Location"]["Bucket"]
+        if "dq-validation" in o["Location"]["Key"]:
+            filename = o["Location"]["Key"]
+
+    s3 = boto3.resource('s3')
+
+    content_object = s3.Object(bucketname, filename)
+    file_content = content_object.get()['Body'].read().decode('utf-8')
+    profilejson = json.loads(file_content)
+    
+    ruleset = ""
+    status = ""
+    
+    for rs in profilejson["rulesetResults"]:
+        ruleset = rs["name"]
+        status = rs["status"]
+        
+    return {
+        'statusCode': 200,
+        'dqstatus': status,
+        'ruleset': ruleset,
+        'jobname' : jobname
+    }
+
+=========== ETL Pipeline Workflow Configuration ===================
+
+{
+  "Comment": "ETL Pipeline",
+  "StartAt": "Glue StartJobRun",
+  "States": {
+    "Glue StartJobRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "<GLUE_JOB_HANDLING_INGESTION"
+      },
+      "Next": "DQWorkflowCall"
+    },
+    "DQWorkflowCall": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "<ARN_REUSABLE_WORKFLOW>",
+        "Input": {
+          "profilejobname": "<DATABREW_DATA_PROFILE_JOB_NAME>",
+          "AWS_STEP_FUNCTIONS_STARTED_BY_EXECUTION_ID.$": "$$.Execution.Id"
+        }
+      },
+      "End": true
+    }
+  }
+}
